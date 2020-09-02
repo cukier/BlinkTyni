@@ -1,76 +1,110 @@
-# Name: Makefile
-# Author: <insert your name here>
-# Copyright: <insert your copyright message here>
-# License: <insert your license reference here>
+# simple AVR Makefile
+#
+# written by michael cousins (http://github.com/mcous)
+# released to the public domain
 
-# DEVICE ....... The AVR device you compile for
-# CLOCK ........ Target AVR clock rate in Hertz
-# OBJECTS ...... The object files created from your source files. This list is
-#                usually the same as the list of source files with suffix ".o".
-# PROGRAMMER ... Options to avrdude which define the hardware you use for
-#                uploading to the AVR and the interface where this hardware
-#                is connected.
-# FUSES ........ Parameters for avrdude to flash the fuses appropriately.
+# Makefile
+#
+# targets:
+#   all:    compiles the source code
+#   test:   tests the isp connection to the mcu
+#   flash:  writes compiled hex file to the mcu's flash memory
+#   fuse:   writes the fuse bytes to the MCU
+#   disasm: disassembles the code for debugging
+#   clean:  removes all .hex, .elf, and .o files in the source code and library directories
 
-DEVICE     = attiny2313
-CLOCK      = 8000000
-PROGRAMMER = -c usbasp-clone -P usb 
-OBJECTS    = src/main.o src/uart.o
-FUSES      = -U lfuse:w:0x64:m -U hfuse:w:0xdd:m -U efuse:w:0xff:m
+# parameters (change this stuff accordingly)
+# project name
+PRJ = BlinkTyni
+# avr mcu
+MCU = attiny2313
+# mcu clock frequency
+CLK = 8000000
+# avr programmer (and port if necessary)
+# e.g. PRG = usbtiny -or- PRG = arduino -P /dev/tty.usbmodem411
+PRG = usbasp-clone
+# fuse values for avr: low, high, and extended
+# these values are from an Arduino Uno (ATMega328P)
+# see http://www.engbedded.com/fusecalc/ for other MCUs and options
+LFU = 0xFF
+HFU = 0xDE
+EFU = 0x05
+# program source files (not including external libraries)
+#SRC = src/main.c src/uart.c
+SRC =
+# where to look for external libraries (consisting of .c/.cpp files and .h files)
+# e.g. EXT = ../../EyeToSee ../../YouSART
+EXT = src
+
+BUILD = build
 
 
-######################################################################
-######################################################################
+#################################################################################################
+# \/ stuff nobody needs to worry about until such time that worrying about it is appropriate \/ #
+#################################################################################################
 
-# Tune the lines below only if you know what you are doing:
+# include path
+INCLUDE := $(foreach dir, $(EXT), -I$(dir))
+# c flags
+CFLAGS    = -Wall -Os -DF_CPU=$(CLK) -mmcu=$(MCU) $(INCLUDE)
+# any aditional flags for c
+CPPFLAGS =
 
-AVRDUDE = avrdude $(PROGRAMMER) -p $(DEVICE)
-COMPILE = avr-gcc -Wall -Os -DF_CPU=$(CLOCK) -mmcu=$(DEVICE)
+# executables
+AVRDUDE = avrdude -c $(PRG) -p $(MCU)
+OBJCOPY = avr-objcopy
+OBJDUMP = avr-objdump
+SIZE    = avr-size --format=avr --mcu=$(MCU)
+CC      = avr-gcc
 
-# symbolic targets:
-all:	main.hex
+# generate list of objects
+CFILES    = $(filter %.c, $(SRC))
+EXTC     := $(foreach dir, $(EXT), $(wildcard $(dir)/*.c))
+CPPFILES  = $(filter %.cpp, $(SRC))
+EXTCPP   := $(foreach dir, $(EXT), $(wildcard $(dir)/*.cpp))
+#OBJ       = $(CFILES:.c=.o) $(EXTC:.c=.o) $(CPPFILES:.cpp=.o) $(EXTCPP:.cpp=.o)
+OBJ       = $(CFILES:.c=.o) $(EXTC:.c=.o) $(CPPFILES:.cpp=.o) $(EXTCPP:.cpp=.o)
 
-.c.o:
-	$(COMPILE) -c $< -o $@
+# user targets
+# compile all files
+all: $(PRJ).hex
 
-.S.o:
-	$(COMPILE) -x assembler-with-cpp -c $< -o $@
-# "-x assembler-with-cpp" should not be necessary since this is the default
-# file type for the .S (with capital S) extension. However, upper case
-# characters are not always preserved on Windows. To ensure WinAVR
-# compatibility define the file type manually.
+# test programmer connectivity
+test:
+	$(AVRDUDE) -v
 
-.c.s:
-	$(COMPILE) -S $< -o $@
+# flash program to mcu
+flash: all
+	$(AVRDUDE) -U flash:w:$(PRJ).hex:i
 
-flash:	all
-	$(AVRDUDE) -U flash:w:main.hex:i
-
+# write fuses to mcu
 fuse:
-	$(AVRDUDE) $(FUSES)
+	$(AVRDUDE) -U lfuse:w:$(LFU):m -U hfuse:w:$(HFU):m -U efuse:w:$(EFU):m
 
-install: flash fuse
+# generate disassembly files for debugging
+disasm: $(PRJ).elf
+	$(OBJDUMP) -d $(PRJ).elf
 
-# if you use a bootloader, change the command below appropriately:
-load: all
-	bootloadHID main.hex
-
+# remove compiled files
 clean:
-	rm -f main.hex main.elf $(OBJECTS)
+	rm -f *.hex *.elf *.o
+	$(foreach dir, $(EXT), rm -f $(dir)/*.o;)
 
-# file targets:
-main.elf: $(OBJECTS)
-	$(COMPILE) -o main.elf $(OBJECTS)
+# other targets
+# objects from c files
+.c.o:
+	$(CC) $(CFLAGS) -c $< -o $@
 
-main.hex: main.elf
-	rm -f main.hex
-	avr-objcopy -j .text -j .data -O ihex main.elf main.hex
-# If you have an EEPROM section, you must also create a hex file for the
-# EEPROM and add it to the "flash" target.
+# objects from c files
+.cpp.o:
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-# Targets for code debugging and analysis:
-disasm:	main.elf
-	avr-objdump -d main.elf
+# elf file
+$(PRJ).elf: $(OBJ)
+	$(CC) $(CFLAGS) -o $(PRJ).elf $(OBJ)
 
-cpp:
-	$(COMPILE) -E main.c
+# hex file
+$(PRJ).hex: $(PRJ).elf
+	rm -f $(PRJ).hex
+	$(OBJCOPY) -j .text -j .data -O ihex $(PRJ).elf $(PRJ).hex
+	$(SIZE) $(PRJ).elf
